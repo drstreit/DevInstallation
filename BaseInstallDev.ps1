@@ -9,6 +9,16 @@ Es installiert die wichtigsten Tools, Pakete und VS Code Extensions.
 $ErrorActionPreference = "Continue"
 
 # ============================================================
+# Admin rights check
+# ============================================================
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "ERROR: This script must be run as Administrator." -ForegroundColor Red
+    Write-Host "       Right-click PowerShell and select 'Run as Administrator', then try again." -ForegroundColor Yellow
+    exit 1
+}
+
+# ============================================================
 # Result tracking
 # ============================================================
 $results = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -27,10 +37,12 @@ function Add-Result {
 }
 
 function Install-Package {
-    param([string]$Name, [string]$Id, [string]$Fix = "")
-    if (-not $Fix) { $Fix = "winget install -e --id $Id --source winget --accept-source-agreements --accept-package-agreements" }
+    param([string]$Name, [string]$Id, [string]$Source = "winget", [string]$Override = "", [string]$Fix = "")
+    $sourceArgs   = if ($Source)   { @("--source",   $Source)   } else { @() }
+    $overrideArgs = if ($Override) { @("--override", $Override) } else { @() }
+    if (-not $Fix) { $Fix = "winget install -e --id $Id $($sourceArgs -join ' ') --accept-source-agreements --accept-package-agreements" }
     Write-Host "  $Name ($Id)..." -ForegroundColor Gray
-    $output = winget install -e --id $Id --source winget `
+    $output = winget install -e --id $Id @sourceArgs @overrideArgs `
         --accept-source-agreements --accept-package-agreements 2>&1
     $ok = $LASTEXITCODE -eq 0
     if (-not $ok) { Write-Host "    $output" -ForegroundColor DarkGray }
@@ -126,7 +138,8 @@ Install-Package "Wget"                "JernejSimoncic.Wget"
 # ============================================================
 Write-Section "2 / IDEs & Editors"
 Install-Package "VS Code"                 "Microsoft.VisualStudioCode"
-Install-Package "Visual Studio Community" "Microsoft.VisualStudio.Community"
+Install-Package "Visual Studio Community" "Microsoft.VisualStudio.Community" `
+    -Override "--add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended --quiet --wait --norestart"
 
 # ============================================================
 # 3. Language runtimes  (Python → Node.js → Rust, in dependency order)
@@ -157,11 +170,17 @@ Refresh-Path
 
 # Python — guard on pip
 if (Test-Cmd "pip") {
-    Invoke-Step "pip upgrade"     { pip install --upgrade pip }   "pip install --upgrade pip"
-    Invoke-Step "pipx install"    { pip install pipx }            "pip install pipx"
-    Invoke-Step "pipx ensurepath" { pipx ensurepath }             "pipx ensurepath"
-    Invoke-Step "argcomplete"     { pipx install argcomplete }    "pipx install argcomplete"
-    Invoke-Step "poetry"          { pipx install poetry }         "pipx install poetry"
+    Invoke-Step "pip upgrade"  { pip install --upgrade pip } "pip install --upgrade pip"
+    Invoke-Step "pipx install" { pip install pipx }          "pip install pipx"
+    Refresh-Path   # pipx lands in Python's Scripts dir; must refresh before first use
+    if (Test-Cmd "pipx") {
+        Invoke-Step "pipx ensurepath" { pipx ensurepath }          "pipx ensurepath"
+        Invoke-Step "argcomplete"     { pipx install argcomplete }  "pipx install argcomplete"
+        Invoke-Step "poetry"          { pipx install poetry }       "pipx install poetry"
+    } else {
+        Skip-Section "pipx" @("pipx ensurepath","argcomplete","poetry") `
+            "Open a new PowerShell window and run: pipx ensurepath; pipx install argcomplete; pipx install poetry"
+    }
 } else {
     Skip-Section "pip" @("pip upgrade","pipx install","pipx ensurepath","argcomplete","poetry") `
         "Open a new PowerShell window and re-run from section 4, or run each command manually."
@@ -169,10 +188,11 @@ if (Test-Cmd "pip") {
 
 # Node.js — guard on npm
 if (Test-Cmd "npm") {
-    Invoke-Step "pnpm"            { npm install -g pnpm }         "npm install -g pnpm"
+    Invoke-Step "pnpm"      { npm install -g pnpm }      "npm install -g pnpm"
+    Invoke-Step "aws-cdk"   { npm install -g aws-cdk }   "npm install -g aws-cdk"
 } else {
-    Skip-Section "npm" @("pnpm") `
-        "Open a new PowerShell window and run: npm install -g pnpm"
+    Skip-Section "npm" @("pnpm","aws-cdk") `
+        "Open a new PowerShell window and run: npm install -g pnpm; npm install -g aws-cdk"
 }
 
 # Rust — guard on cargo
@@ -193,8 +213,7 @@ if (Test-Cmd "cargo") {
 # ============================================================
 Write-Section "5 / Cloud Tools"
 Install-Package "AWS CLI"     "Amazon.AWSCLI"
-Install-Package "AWS SAM CLI" "Amazon.AWSSAMCLI"
-Install-Package "AWS CDK"     "Amazon.AWSCDK"
+Install-Package "AWS SAM CLI" "Amazon.AWSSAMCLI" -Source ""   # not on winget source
 Install-Package "SnowSQL"     "Snowflake.SnowSQL"
 
 # ============================================================
